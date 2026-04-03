@@ -2,7 +2,9 @@ import { fetchWordPress } from "@/lib/wordpress";
 import type { WordPressTour } from "@/types/wordpress-tour";
 
 async function getTours(): Promise<WordPressTour[]> {
-  return fetchWordPress<WordPressTour[]>("/tour?_embed&per_page=12");
+  const data = await fetchWordPress<WordPressTour[]>("/tour?_embed&per_page=12");
+  console.log("TOURS API DATA:", data);
+  return data;
 }
 
 export default async function ToursLivePage() {
