@@ -101,21 +101,18 @@ export default function ToursHorizontalExperience({ tours }: ToursHorizontalExpe
           const track = section.querySelector<HTMLElement>('.tour-horizontal-track');
           if (!track) return;
 
-          const panels = track.querySelectorAll('.tour-horizontal-panel').length;
-          const distance = (panels - 1) * 100;
-
           gsap.set(track, { xPercent: 0 });
 
           gsap.fromTo(
             track,
             { xPercent: 0 },
             {
-              xPercent: -distance,
+              x: () => -(track.scrollWidth - section.offsetWidth),
               ease: 'none',
               scrollTrigger: {
                 trigger: section,
                 start: 'top top',
-                end: `+=${Math.max(1600, panels * 700)}`,
+                end: () => `+=${track.scrollWidth - section.offsetWidth}`,
                 scrub: 0.9,
                 pin: true,
                 anticipatePin: 1,
