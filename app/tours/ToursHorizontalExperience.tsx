@@ -91,7 +91,6 @@ export default function ToursHorizontalExperience({ tours }: ToursHorizontalExpe
 
       const gsap = window.gsap;
       const ScrollTrigger = window.ScrollTrigger as ScrollTriggerCore;
-      const scrollerElement = wrapperRef.current;
 
       gsap.registerPlugin(window.ScrollTrigger);
 
@@ -112,7 +111,6 @@ export default function ToursHorizontalExperience({ tours }: ToursHorizontalExpe
               ease: 'none',
               scrollTrigger: {
                 trigger: section,
-                scroller: scrollerElement,
                 start: 'top top',
                 end: () => `+=${track.scrollWidth - section.offsetWidth}`,
                 scrub: 0.9,
@@ -142,9 +140,9 @@ export default function ToursHorizontalExperience({ tours }: ToursHorizontalExpe
   }
 
   return (
-    <div ref={wrapperRef} className="h-screen snap-y snap-mandatory overflow-y-auto bg-[#04020d] text-white">
+    <div ref={wrapperRef} className="bg-[#04020d] text-white">
       {tourSections.map((tour, index) => (
-        <section key={tour.id} className="tour-horizontal-section relative h-screen snap-start overflow-hidden border-b border-white/10">
+        <section key={tour.id} className="tour-horizontal-section relative h-screen overflow-hidden border-b border-white/10">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(128,90,213,0.35),transparent_50%),radial-gradient(circle_at_bottom_left,rgba(56,189,248,0.25),transparent_55%)]" />
 
           <div className="tour-horizontal-track flex h-full w-[300vw]">
