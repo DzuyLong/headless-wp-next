@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import type { TourItem } from '@/lib/api/tour';
-import gsap from 'gsap';
-import { ScrollTrigger } from 'gsap/ScrollTrigger';
+import GalleryLightbox, { type GalleryLightboxSlide } from '@/components/lightbox/GalleryLightbox';
+import useLightbox from '@/components/lightbox/useLightbox';
+import useToursHorizontalScroll from '@/components/tours/useToursHorizontalScroll';
 
 type ToursHorizontalExperienceProps = {
   tours: TourItem[];
@@ -15,6 +16,17 @@ type GalleryRows = {
   top: string[];
   bottom: string[];
 };
+
+function buildLightboxSlides(tour: TourItem): GalleryLightboxSlide[] {
+  const images = tour.gallery.filter(Boolean);
+  const fallback = tour.featuredImage ? [tour.featuredImage] : [];
+  const source = (images.length ? images : fallback).slice(0, 24);
+
+  return source.map((src, index) => ({
+    src,
+    alt: `${tour.name} gallery ${index + 1}`,
+  }));
+}
 
 function buildGalleryRows(tour: TourItem): GalleryRows {
   const images = tour.gallery.filter(Boolean);
@@ -45,17 +57,9 @@ function buildTourSlides(tour: TourItem) {
 
 export default function ToursHorizontalExperience({ tours }: ToursHorizontalExperienceProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
-  const refreshRafRef = useRef<number | null>(null);
 
-  const scheduleRefresh = () => {
-    if (typeof window === 'undefined') return;
-    if (refreshRafRef.current !== null) return;
-
-    refreshRafRef.current = window.requestAnimationFrame(() => {
-      refreshRafRef.current = null;
-      ScrollTrigger.refresh();
-    });
-  };
+  const lightbox = useLightbox();
+  const [activeSlides, setActiveSlides] = useState<GalleryLightboxSlide[]>([]);
 
   const tourSections = useMemo(
     () =>
@@ -63,128 +67,19 @@ export default function ToursHorizontalExperience({ tours }: ToursHorizontalExpe
         ...tour,
         slides: buildTourSlides(tour),
         galleryRows: buildGalleryRows(tour),
+        lightboxSlides: buildLightboxSlides(tour),
       })),
     [tours]
   );
 
+  const { scheduleRefresh } = useToursHorizontalScroll(wrapperRef, [tourSections]);
+
   useEffect(() => {
-    let isMounted = true;
-    let cleanup: (() => void) | undefined;
-
-    const setupAnimation = () => {
-      if (!wrapperRef.current) return;
-
-      if (!isMounted) return;
-
-      gsap.registerPlugin(ScrollTrigger);
-
-      const refreshHandlers: Array<() => void> = [];
-      const context = gsap.context(() => {
-        const sections = gsap.utils.toArray<HTMLElement>('.tour-horizontal-section');
-
-        sections.forEach((section: HTMLElement) => {
-          const track = section.querySelector<HTMLElement>('.tour-horizontal-track');
-          if (!track) return;
-
-          const panel1 = section.querySelector<HTMLElement>('[data-panel="1"]');
-          const viewportTop =
-            panel1?.querySelector<HTMLElement>('[data-gallery-viewport="top"]') || null;
-          const viewportBottom =
-            panel1?.querySelector<HTMLElement>('[data-gallery-viewport="bottom"]') || null;
-          const rowTop =
-            panel1?.querySelector<HTMLElement>('[data-gallery-row="top"]') || null;
-          const rowBottom =
-            panel1?.querySelector<HTMLElement>('[data-gallery-row="bottom"]') || null;
-
-          const getGalleryDistance = (viewport: HTMLElement, row: HTMLElement) =>
-            Math.max(0, row.scrollWidth - viewport.clientWidth);
-
-          let timeline: gsap.core.Timeline | null = null;
-
-            const build = () => {
-              timeline?.scrollTrigger?.kill();
-              timeline?.kill();
-
-              gsap.set(track, { x: 0, xPercent: 0 });
-
-              const horizontalDistance = Math.max(0, track.scrollWidth - section.offsetWidth);
-            const galleryDistanceTop =
-              viewportTop && rowTop ? getGalleryDistance(viewportTop, rowTop) : 0;
-            const galleryDistanceBottom =
-              viewportBottom && rowBottom ? getGalleryDistance(viewportBottom, rowBottom) : 0;
-            const galleryDistance = Math.max(galleryDistanceTop, galleryDistanceBottom);
-
-            if (rowBottom && viewportBottom) {
-              gsap.set(rowBottom, {
-                x: -galleryDistanceBottom,
-              });
-            }
-
-            const galleryDuration = galleryDistance;
-            const horizontalDuration = horizontalDistance;
-
-            timeline = gsap.timeline({
-              defaults: { ease: 'none' },
-              scrollTrigger: {
-                trigger: section,
-                start: 'top top',
-                end: () => {
-                  const gTop =
-                    viewportTop && rowTop ? getGalleryDistance(viewportTop, rowTop) : 0;
-                  const gBottom =
-                    viewportBottom && rowBottom
-                      ? getGalleryDistance(viewportBottom, rowBottom)
-                      : 0;
-                  const g = Math.max(gTop, gBottom);
-                  const h = Math.max(0, track.scrollWidth - section.offsetWidth);
-                  return `+=${g + h}`;
-                },
-                scrub: 0.9,
-                pin: true,
-                anticipatePin: 1,
-                invalidateOnRefresh: true,
-              },
-            });
-
-            if (viewportTop && rowTop && viewportBottom && rowBottom && galleryDistance > 0) {
-              timeline.to(rowTop, { x: -galleryDistanceTop, duration: galleryDuration }, 0);
-              timeline.to(rowBottom, { x: 0, duration: galleryDuration }, 0);
-            }
-
-            if (horizontalDistance > 0) {
-              timeline.to(
-                track,
-                { x: -horizontalDistance, duration: horizontalDuration },
-                galleryDuration
-              );
-            }
-          };
-
-          build();
-          ScrollTrigger.addEventListener('refreshInit', build);
-          refreshHandlers.push(() => ScrollTrigger.removeEventListener('refreshInit', build));
-        });
-
-        ScrollTrigger.refresh();
-      }, wrapperRef.current);
-
-      cleanup = () => {
-        refreshHandlers.forEach((dispose) => dispose());
-        context.revert();
-      };
-    };
-
-    setupAnimation();
-
+    document.body.dataset.lightboxOpen = lightbox.open ? '1' : '0';
     return () => {
-      isMounted = false;
-      if (refreshRafRef.current !== null) {
-        window.cancelAnimationFrame(refreshRafRef.current);
-        refreshRafRef.current = null;
-      }
-      cleanup?.();
+      delete document.body.dataset.lightboxOpen;
     };
-  }, [tourSections]);
+  }, [lightbox.open]);
 
   if (tourSections.length === 0) {
     return <p className="px-8 py-16 text-center text-lg">Không có tour nào.</p>;
@@ -192,6 +87,12 @@ export default function ToursHorizontalExperience({ tours }: ToursHorizontalExpe
 
   return (
     <div ref={wrapperRef} className="bg-[#04020d] text-white">
+      <GalleryLightbox
+        open={lightbox.open}
+        index={lightbox.index}
+        slides={activeSlides}
+        onClose={lightbox.close}
+      />
       {tourSections.map((tour, index) => (
         <section key={tour.id} className="tour-horizontal-section relative h-screen overflow-hidden border-b border-white/10">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(128,90,213,0.35),transparent_50%),radial-gradient(circle_at_bottom_left,rgba(56,189,248,0.25),transparent_55%)]" />
@@ -223,9 +124,15 @@ export default function ToursHorizontalExperience({ tours }: ToursHorizontalExpe
                   <div data-gallery-viewport="top" className="overflow-hidden">
                     <div data-gallery-row="top" className="flex w-max items-center gap-3">
                       {tour.galleryRows.top.map((src, imgIndex) => (
-                        <div
+                        <button
+                          type="button"
                           key={`top-${tour.id}-${imgIndex}-${src}`}
-                          className="relative h-20 w-32 overflow-hidden rounded-2xl border border-white/10 bg-white/5 sm:h-24 sm:w-40"
+                          className="relative h-20 w-32 overflow-hidden rounded-2xl border border-white/10 bg-white/5 outline-none transition hover:border-white/25 focus-visible:ring-2 focus-visible:ring-cyan-300/70 sm:h-24 sm:w-40"
+                          onClick={() => {
+                            const baseIndex = tour.lightboxSlides.findIndex((slide) => slide.src === src);
+                            setActiveSlides(tour.lightboxSlides);
+                            lightbox.openAt(baseIndex >= 0 ? baseIndex : 0);
+                          }}
                         >
                           <Image
                             src={src}
@@ -235,7 +142,7 @@ export default function ToursHorizontalExperience({ tours }: ToursHorizontalExpe
                             className="object-cover"
                             onLoadingComplete={scheduleRefresh}
                           />
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </div>
@@ -243,9 +150,15 @@ export default function ToursHorizontalExperience({ tours }: ToursHorizontalExpe
                   <div data-gallery-viewport="bottom" className="overflow-hidden">
                     <div data-gallery-row="bottom" className="flex w-max items-center gap-3">
                       {tour.galleryRows.bottom.map((src, imgIndex) => (
-                        <div
+                        <button
+                          type="button"
                           key={`bottom-${tour.id}-${imgIndex}-${src}`}
-                          className="relative h-20 w-32 overflow-hidden rounded-2xl border border-white/10 bg-white/5 sm:h-24 sm:w-40"
+                          className="relative h-20 w-32 overflow-hidden rounded-2xl border border-white/10 bg-white/5 outline-none transition hover:border-white/25 focus-visible:ring-2 focus-visible:ring-cyan-300/70 sm:h-24 sm:w-40"
+                          onClick={() => {
+                            const baseIndex = tour.lightboxSlides.findIndex((slide) => slide.src === src);
+                            setActiveSlides(tour.lightboxSlides);
+                            lightbox.openAt(baseIndex >= 0 ? baseIndex : 0);
+                          }}
                         >
                           <Image
                             src={src}
@@ -255,7 +168,7 @@ export default function ToursHorizontalExperience({ tours }: ToursHorizontalExpe
                             className="object-cover"
                             onLoadingComplete={scheduleRefresh}
                           />
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </div>

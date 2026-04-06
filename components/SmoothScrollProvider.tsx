@@ -97,6 +97,7 @@ export default function SmoothScrollProvider({
       const onWheel = (event: WheelEvent) => {
         if (event.defaultPrevented) return;
         if (event.ctrlKey || event.metaKey || event.altKey) return;
+        if (document.body?.dataset?.lightboxOpen === '1') return;
 
         const deltaY = normalizeDeltaY(event);
         if (deltaY === 0) return;
