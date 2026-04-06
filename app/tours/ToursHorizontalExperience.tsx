@@ -4,51 +4,29 @@ import { useEffect, useMemo, useRef } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import type { TourItem } from '@/lib/api/tour';
+import gsap from 'gsap';
+import { ScrollTrigger } from 'gsap/ScrollTrigger';
 
 type ToursHorizontalExperienceProps = {
   tours: TourItem[];
 };
 
-type GSAPCore = {
-  registerPlugin: (...plugins: unknown[]) => void;
-  utils: { toArray: <T = Element>(selector: string) => T[] };
-  context: (
-    callback: () => void,
-    scope?: Element | string | null
-  ) => { revert: () => void };
-  fromTo: (target: unknown, fromVars: Record<string, unknown>, toVars: Record<string, unknown>) => unknown;
-  set: (target: unknown, vars: Record<string, unknown>) => unknown;
+type GalleryRows = {
+  top: string[];
+  bottom: string[];
 };
 
-type ScrollTriggerCore = {
-  refresh: () => void;
-};
+function buildGalleryRows(tour: TourItem): GalleryRows {
+  const images = tour.gallery.filter(Boolean);
+  const fallback = tour.featuredImage ? [tour.featuredImage] : [];
+  const source = (images.length ? images : fallback).slice(0, 12);
 
-declare global {
-  interface Window {
-    gsap?: GSAPCore;
-    ScrollTrigger?: unknown;
-  }
-}
+  const top = source.filter((_, index) => index % 2 === 0);
+  const bottomRaw = source.filter((_, index) => index % 2 === 1);
+  const bottom = bottomRaw.length ? bottomRaw : top;
 
-const GSAP_CDN = 'https://cdn.jsdelivr.net/npm/gsap@3.12.7/dist/gsap.min.js';
-const SCROLL_TRIGGER_CDN =
-  'https://cdn.jsdelivr.net/npm/gsap@3.12.7/dist/ScrollTrigger.min.js';
-
-function loadExternalScript(src: string) {
-  return new Promise<void>((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) {
-      resolve();
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.src = src;
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
-    document.head.appendChild(script);
-  });
+  // Duplicate so rows are long enough to scroll.
+  return { top: [...top, ...top], bottom: [...bottom, ...bottom] };
 }
 
 function buildTourSlides(tour: TourItem) {
@@ -67,12 +45,24 @@ function buildTourSlides(tour: TourItem) {
 
 export default function ToursHorizontalExperience({ tours }: ToursHorizontalExperienceProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const refreshRafRef = useRef<number | null>(null);
+
+  const scheduleRefresh = () => {
+    if (typeof window === 'undefined') return;
+    if (refreshRafRef.current !== null) return;
+
+    refreshRafRef.current = window.requestAnimationFrame(() => {
+      refreshRafRef.current = null;
+      ScrollTrigger.refresh();
+    });
+  };
 
   const tourSections = useMemo(
     () =>
       tours.map((tour) => ({
         ...tour,
         slides: buildTourSlides(tour),
+        galleryRows: buildGalleryRows(tour),
       })),
     [tours]
   );
@@ -81,56 +71,117 @@ export default function ToursHorizontalExperience({ tours }: ToursHorizontalExpe
     let isMounted = true;
     let cleanup: (() => void) | undefined;
 
-    const setupAnimation = async () => {
+    const setupAnimation = () => {
       if (!wrapperRef.current) return;
 
-      await loadExternalScript(GSAP_CDN);
-      await loadExternalScript(SCROLL_TRIGGER_CDN);
+      if (!isMounted) return;
 
-      if (!isMounted || !window.gsap || !window.ScrollTrigger) return;
+      gsap.registerPlugin(ScrollTrigger);
 
-      const gsap = window.gsap;
-      const ScrollTrigger = window.ScrollTrigger as ScrollTriggerCore;
-
-      gsap.registerPlugin(window.ScrollTrigger);
-
+      const refreshHandlers: Array<() => void> = [];
       const context = gsap.context(() => {
         const sections = gsap.utils.toArray<HTMLElement>('.tour-horizontal-section');
 
-        sections.forEach((section) => {
+        sections.forEach((section: HTMLElement) => {
           const track = section.querySelector<HTMLElement>('.tour-horizontal-track');
           if (!track) return;
 
-          gsap.set(track, { xPercent: 0 });
+          const panel1 = section.querySelector<HTMLElement>('[data-panel="1"]');
+          const viewportTop =
+            panel1?.querySelector<HTMLElement>('[data-gallery-viewport="top"]') || null;
+          const viewportBottom =
+            panel1?.querySelector<HTMLElement>('[data-gallery-viewport="bottom"]') || null;
+          const rowTop =
+            panel1?.querySelector<HTMLElement>('[data-gallery-row="top"]') || null;
+          const rowBottom =
+            panel1?.querySelector<HTMLElement>('[data-gallery-row="bottom"]') || null;
 
-          gsap.fromTo(
-            track,
-            { xPercent: 0 },
-            {
-              x: () => -(track.scrollWidth - section.offsetWidth),
-              ease: 'none',
+          const getGalleryDistance = (viewport: HTMLElement, row: HTMLElement) =>
+            Math.max(0, row.scrollWidth - viewport.clientWidth);
+
+          let timeline: gsap.core.Timeline | null = null;
+
+            const build = () => {
+              timeline?.scrollTrigger?.kill();
+              timeline?.kill();
+
+              gsap.set(track, { x: 0, xPercent: 0 });
+
+              const horizontalDistance = Math.max(0, track.scrollWidth - section.offsetWidth);
+            const galleryDistanceTop =
+              viewportTop && rowTop ? getGalleryDistance(viewportTop, rowTop) : 0;
+            const galleryDistanceBottom =
+              viewportBottom && rowBottom ? getGalleryDistance(viewportBottom, rowBottom) : 0;
+            const galleryDistance = Math.max(galleryDistanceTop, galleryDistanceBottom);
+
+            if (rowBottom && viewportBottom) {
+              gsap.set(rowBottom, {
+                x: -galleryDistanceBottom,
+              });
+            }
+
+            const galleryDuration = galleryDistance;
+            const horizontalDuration = horizontalDistance;
+
+            timeline = gsap.timeline({
+              defaults: { ease: 'none' },
               scrollTrigger: {
                 trigger: section,
                 start: 'top top',
-                end: () => `+=${track.scrollWidth - section.offsetWidth}`,
+                end: () => {
+                  const gTop =
+                    viewportTop && rowTop ? getGalleryDistance(viewportTop, rowTop) : 0;
+                  const gBottom =
+                    viewportBottom && rowBottom
+                      ? getGalleryDistance(viewportBottom, rowBottom)
+                      : 0;
+                  const g = Math.max(gTop, gBottom);
+                  const h = Math.max(0, track.scrollWidth - section.offsetWidth);
+                  return `+=${g + h}`;
+                },
                 scrub: 0.9,
                 pin: true,
                 anticipatePin: 1,
+                invalidateOnRefresh: true,
               },
+            });
+
+            if (viewportTop && rowTop && viewportBottom && rowBottom && galleryDistance > 0) {
+              timeline.to(rowTop, { x: -galleryDistanceTop, duration: galleryDuration }, 0);
+              timeline.to(rowBottom, { x: 0, duration: galleryDuration }, 0);
             }
-          );
+
+            if (horizontalDistance > 0) {
+              timeline.to(
+                track,
+                { x: -horizontalDistance, duration: horizontalDuration },
+                galleryDuration
+              );
+            }
+          };
+
+          build();
+          ScrollTrigger.addEventListener('refreshInit', build);
+          refreshHandlers.push(() => ScrollTrigger.removeEventListener('refreshInit', build));
         });
 
         ScrollTrigger.refresh();
       }, wrapperRef.current);
 
-      cleanup = () => context.revert();
+      cleanup = () => {
+        refreshHandlers.forEach((dispose) => dispose());
+        context.revert();
+      };
     };
 
     setupAnimation();
 
     return () => {
       isMounted = false;
+      if (refreshRafRef.current !== null) {
+        window.cancelAnimationFrame(refreshRafRef.current);
+        refreshRafRef.current = null;
+      }
       cleanup?.();
     };
   }, [tourSections]);
@@ -146,7 +197,7 @@ export default function ToursHorizontalExperience({ tours }: ToursHorizontalExpe
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(128,90,213,0.35),transparent_50%),radial-gradient(circle_at_bottom_left,rgba(56,189,248,0.25),transparent_55%)]" />
 
           <div className="tour-horizontal-track flex h-full w-[300vw]">
-            <article className="tour-horizontal-panel relative flex h-full w-screen flex-col justify-end p-8 md:p-16">
+            <article data-panel="1" className="tour-horizontal-panel relative flex h-full w-screen flex-col justify-end p-8 md:p-16">
               {tour.slides[0]?.src ? (
                 <Image
                   src={tour.slides[0].src}
@@ -163,6 +214,52 @@ export default function ToursHorizontalExperience({ tours }: ToursHorizontalExpe
                 </p>
                 <h2 className="text-4xl font-semibold md:text-6xl">{tour.name}</h2>
                 <p className="max-w-xl text-base text-white/85 md:text-lg">{tour.desc || 'Trải nghiệm hành trình đặc sắc với timeline dựng theo nhịp cuộn của người dùng.'}</p>
+              </div>
+
+              <div className="relative z-10 mt-8 w-full max-w-3xl overflow-hidden rounded-3xl border border-white/15 bg-black/30 p-4 backdrop-blur">
+                <div className="text-xs uppercase tracking-[0.22em] text-white/60">Gallery</div>
+
+                <div className="mt-4 space-y-3">
+                  <div data-gallery-viewport="top" className="overflow-hidden">
+                    <div data-gallery-row="top" className="flex w-max items-center gap-3">
+                      {tour.galleryRows.top.map((src, imgIndex) => (
+                        <div
+                          key={`top-${tour.id}-${imgIndex}-${src}`}
+                          className="relative h-20 w-32 overflow-hidden rounded-2xl border border-white/10 bg-white/5 sm:h-24 sm:w-40"
+                        >
+                          <Image
+                            src={src}
+                            alt={`${tour.name} gallery ${imgIndex + 1}`}
+                            fill
+                            unoptimized
+                            className="object-cover"
+                            onLoadingComplete={scheduleRefresh}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div data-gallery-viewport="bottom" className="overflow-hidden">
+                    <div data-gallery-row="bottom" className="flex w-max items-center gap-3">
+                      {tour.galleryRows.bottom.map((src, imgIndex) => (
+                        <div
+                          key={`bottom-${tour.id}-${imgIndex}-${src}`}
+                          className="relative h-20 w-32 overflow-hidden rounded-2xl border border-white/10 bg-white/5 sm:h-24 sm:w-40"
+                        >
+                          <Image
+                            src={src}
+                            alt={`${tour.name} gallery ${imgIndex + 1}`}
+                            fill
+                            unoptimized
+                            className="object-cover"
+                            onLoadingComplete={scheduleRefresh}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
             </article>
 
